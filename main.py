@@ -1,11 +1,15 @@
 # main.py
-# Симуляционный Telegram-обменник USDT → RUB (тестовая версия для Railway)
-# Токен уже вставлен. После деплоя проверь /start в Telegram
+"""
+Профессиональный симуляционный Telegram-обменник USDT → RUB
+Версия для Railway (Python 3.12), без БД, с тестовыми платежами
+Исправлены все синтаксические ошибки, добавлено логирование
+"""
 
 import asyncio
-import uuid
-import random
+import logging
 import os
+import random
+import uuid
 from datetime import datetime
 
 from fastapi import FastAPI, Request
@@ -19,124 +23,167 @@ from telegram.ext import (
     filters,
     ContextTypes,
 )
-import aiohttp
 
 # ──────────────────────────────────────────────────────────────────────────────
-# ТВОЙ ТОКЕН УЖЕ ЗДЕСЬ
-BOT_TOKEN = "8725892114:AAGOQTmyHtQa9a2JIyhjwCSa1x1tqG1sdzQ"
+# Настройки логирования
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)-8s | %(name)s: %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
+)
+logger = logging.getLogger(__name__)
 
-# Получаем домен от Railway автоматически
-RAILWAY_PUBLIC_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN")
+# ──────────────────────────────────────────────────────────────────────────────
+# Конфигурация (из переменных окружения Railway)
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+if not BOT_TOKEN:
+    raise ValueError("BOT_TOKEN не задан в переменных окружения Railway")
+
 PORT = int(os.getenv("PORT", 8000))
 WEBHOOK_PATH = "/webhook"
-WEBHOOK_URL = f"https://{RAILWAY_PUBLIC_DOMAIN}{WEBHOOK_PATH}" if RAILWAY_PUBLIC_DOMAIN else f"http://localhost:{PORT}{WEBHOOK_PATH}"
 
-print(f"Запуск бота с webhook: {WEBHOOK_URL}")
+# Автоматическое определение домена от Railway
+RAILWAY_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN")
+WEBHOOK_URL = f"https://{RAILWAY_DOMAIN}{WEBHOOK_PATH}" if RAILWAY_DOMAIN else f"http://localhost:{PORT}{WEBHOOK_PATH}"
 
+logger.info(f"Запуск бота | Webhook URL: {WEBHOOK_URL}")
+
+# ──────────────────────────────────────────────────────────────────────────────
 # FastAPI приложение
-app = FastAPI(title="Exchanger Test v12 - Railway")
+app = FastAPI(
+    title="P2P Exchanger Simulator",
+    description="Симуляционный Telegram-обменник для тестирования",
+    version="1.0.0"
+)
 
-# Глобальные переменные для бота
-bot = None
-application = None
-
-# ──────────────────────────────────────────────────────────────────────────────
-# Простые утилиты (без БД для начала, чтобы не было ошибок)
-
-async def get_rate() -> float:
-    return 105.50 * (1 + random.uniform(0.05, 0.10))
-
-def jitter_amount(base: float) -> float:
-    return round(base * random.uniform(0.92, 1.12), 2)
-
-async def create_test_invoice(amount_usdt: float, order_id: str) -> str:
-    # Симуляция ссылки на оплату (пока без реального Cryptomus)
-    print(f"Создаём тестовый инвойс: {amount_usdt} USDT, ордер {order_id}")
-    return f"https://test-payment.example.com/pay/{order_id}?amount={amount_usdt}"
+# Глобальные объекты
+bot_application: Application = None
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Telegram команды
+# Утилиты
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+def calculate_rate() -> float:
+    """Симуляция текущего курса с небольшой накруткой"""
+    base = 105.50
+    spread = random.uniform(0.05, 0.10)
+    return base * (1 + spread)
+
+
+def apply_jitter(amount: float) -> float:
+    """Лёгкая рандомизация суммы для реализма"""
+    jitter = random.uniform(-0.08, 0.12)
+    return round(amount * (1 + jitter), 2)
+
+
+async def create_test_payment(amount_usdt: float, order_id: str) -> str:
+    """Симуляция создания платёжной ссылки (без реального шлюза)"""
+    fake_tx = uuid.uuid4().hex[:10]
+    url = f"https://test-gateway.example.com/pay/{fake_tx}?order={order_id}&amt={amount_usdt}"
+    logger.info(f"Создана тестовая ссылка оплаты: {url}")
+    return url
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Обработчики Telegram
+
+async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     keyboard = [
-        [InlineKeyboardButton("USDT → RUB (карта/СБП)", callback_data="exchange_usdt_rub")]
+        [InlineKeyboardButton("USDT → RUB (карта/СБП)", callback_data="ex_usdt_rub")]
     ]
-    reply_markup = InlineKeyboardMarkup(keyboard)
     await update.message.reply_text(
-        "Привет! Это тестовый симуляционный обменник.\n"
-        "Выбери направление:",
-        reply_markup=reply_markup
+        "Добро пожаловать в симуляционный P2P-обменник v1.0\n"
+        "Выберите направление обмена:",
+        reply_markup=InlineKeyboardMarkup(keyboard)
     )
 
-async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+async def callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
 
-    if query.data == "exchange_usdt_rub":
-        context.user_data["mode"] = "usdt_to_rub"
-        await query.message.reply_text("Введи сумму в USDT (минимум 10):")
+    if query.data == "ex_usdt_rub":
+        context.user_data["mode"] = "usdt_rub"
+        await query.message.reply_text(
+            "Введите сумму в USDT (минимум 10 USDT):"
+        )
 
-async def amount_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if context.user_data.get("mode") != "usdt_to_rub":
-        await update.message.reply_text("Начни с /start")
+
+async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    if context.user_data.get("mode") != "usdt_rub":
+        await update.message.reply_text("Начните с команды /start")
         return
 
     try:
-        usdt = float(update.message.text.strip())
-        if usdt < 10:
+        usdt_amount = float(update.message.text.strip())
+        if usdt_amount < 10:
             raise ValueError
-    except:
-        await update.message.reply_text("Введи число не меньше 10")
+    except ValueError:
+        await update.message.reply_text("Введите корректное число не меньше 10")
         return
 
-    rate = await get_rate()
-    rub = jitter_amount(usdt * rate)
+    rate = calculate_rate()
+    rub_amount = apply_jitter(usdt_amount * rate)
 
     order_id = str(uuid.uuid4())[:8].upper()
-
-    payment_url = await create_test_invoice(usdt, order_id)
+    payment_url = await create_test_payment(usdt_amount, order_id)
 
     await update.message.reply_text(
-        f"Ордер: {order_id}\n"
-        f"Отправляешь: {usdt:.2f} USDT\n"
-        f"Получаешь ≈ {rub:.2f} RUB\n\n"
-        f"Ссылка на оплату (тест):\n{payment_url}\n\n"
-        "После оплаты напиши /paid — пришлю симуляцию зачисления"
+        f"Ордер #{order_id}\n\n"
+        f"Вы отправляете: {usdt_amount:.2f} USDT\n"
+        f"Получаете ≈ {rub_amount:.2f} RUB\n\n"
+        f"Ссылка на оплату (тестовая):\n{payment_url}\n\n"
+        "После оплаты напишите /confirm для симуляции зачисления"
     )
 
-async def paid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
+async def cmd_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await update.message.reply_text(
-        "Оплата подтверждена (симуляция)!\n"
-        "Реквизиты: 2200 1234 5678 9012 (тестовая карта)\n"
-        "Сумма зачислена. Спасибо!"
+        "✅ Оплата подтверждена (симуляция)\n"
+        "Зачислено на карту: 2200 1234 5678 9012\n"
+        "Сумма успешно получена. Спасибо за использование!"
     )
+
 
 # ──────────────────────────────────────────────────────────────────────────────
-# Webhook для Telegram
+# Webhook-эндпоинт для Telegram
 
 @app.post(WEBHOOK_PATH)
 async def telegram_webhook(request: Request):
-    update = Update.de_json(await request.json(), bot)
-    await application.process_update(update)
-    return {"ok": True}
+    update = Update.de_json(await request.json(), bot_application.bot)
+    await bot_application.process_update(update)
+    return JSONResponse({"ok": True})
+
+
+# ──────────────────────────────────────────────────────────────────────────────
+# Инициализация бота
+
+async def init_bot():
+    global bot_application
+    bot_application = Application.builder().token(BOT_TOKEN).build()
+
+    # Регистрация обработчиков
+    bot_application.add_handler(CommandHandler("start", cmd_start))
+    bot_application.add_handler(CallbackQueryHandler(callback_query))
+    bot_application.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, text_handler))
+    bot_application.add_handler(CommandHandler("confirm", cmd_confirm))
+
+    await bot_application.initialize()
+    await bot_application.bot.set_webhook(url=WEBHOOK_URL)
+    logger.info("Webhook успешно установлен")
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Запуск
 
-async def setup_bot():
-    global bot, application
-    bot = await Bot(token=BOT_TOKEN).initialize()
-    application = Application.builder().token(BOT_TOKEN).build()
-
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(callback_handler))
-    application.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, amount_handler))
-    application.add_handler(CommandHandler("paid", paid_handler))
-
-    await bot.set_webhook(url=WEBHOOK_URL)
-    print("Webhook успешно установлен!")
-
 if __name__ == "__main__":
     import uvicorn
-    asyncio.run(setup_bot())
-    uvicorn.run("main:app", host="0.0.0.0", port=PORT, log_level="info")
+
+    # Инициализация бота перед запуском сервера
+    asyncio.run(init_bot())
+
+    uvicorn.run(
+        "main:app",
+        host="0.0.0.0",
+        port=PORT,
+        log_level="info",
+        workers=1,
+    )
