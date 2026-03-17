@@ -1,7 +1,8 @@
 # main.py
 """
-Симуляционный P2P-обменник USDT → RUB для Telegram
-Готов к деплою на Railway (Python 3.12)
+Симуляционный Telegram-обменник USDT → RUB
+Версия без БД, с тестовыми платежами
+Готов к Railway (Python 3.12)
 """
 
 import asyncio
@@ -38,11 +39,10 @@ if not BOT_TOKEN:
 PORT = int(os.getenv("PORT", 8000))
 WEBHOOK_PATH = "/webhook"
 
-# Домен от Railway (автоматически подставляется)
 RAILWAY_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN")
 WEBHOOK_URL = f"https://{RAILWAY_DOMAIN}{WEBHOOK_PATH}" if RAILWAY_DOMAIN else f"http://localhost:{PORT}{WEBHOOK_PATH}"
 
-logger.info(f"Запуск бота | Webhook: {WEBHOOK_URL}")
+logger.info(f"Запуск бота | Webhook URL: {WEBHOOK_URL}")
 
 # FastAPI приложение
 app = FastAPI(title="P2P Exchanger Test", version="1.0")
@@ -55,17 +55,14 @@ application: Application = None
 # Утилиты
 
 def get_rate() -> float:
-    """Симуляция курса с накруткой 5–10%"""
     return 105.50 * (1 + random.uniform(0.05, 0.10))
 
 
 def jitter(base: float) -> float:
-    """Рандомизация суммы ±8%"""
     return round(base * random.uniform(0.92, 1.08), 2)
 
 
 async def create_fake_payment(amount: float, order_id: str) -> str:
-    """Тестовая платёжная ссылка"""
     tx = uuid.uuid4().hex[:10]
     url = f"https://test-pay.example.com/pay/{tx}?order={order_id}&sum={amount}"
     logger.info(f"Сгенерирована тестовая оплата → {url}")
@@ -105,7 +102,7 @@ async def amount_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         if amount < 10:
             raise ValueError
     except:
-        await update.message.reply_text("Введите число не меньше 10")
+        await update.message.reply_text("Введите число ≥ 10")
         return
 
     rate = get_rate()
@@ -159,7 +156,7 @@ async def setup():
 
 
 # ────────────────────────────────────────────────
-# Запуск
+# Запуск — ТОЛЬКО ЗДЕСЬ
 
 if __name__ == "__main__":
     import uvicorn
