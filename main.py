@@ -1,7 +1,7 @@
 # main.py
 """
-Симуляционный Telegram P2P-обменник USDT → RUB
-Версия для Railway (Python 3.12), без базы данных, тестовые платежи
+Симуляционный P2P-обменник USDT → RUB для Telegram
+Готов к деплою на Railway (Python 3.12)
 """
 
 import asyncio
@@ -25,54 +25,54 @@ from telegram.ext import (
 # Логирование
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)-8s | %(message)s",
+    format="%(asctime)s | %(levelname)-7s | %(message)s",
     datefmt="%Y-%m-%d %H:%M:%S"
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger("ExchangerBot")
 
-# Конфиг из переменных окружения
+# Конфигурация
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN не задан в переменных окружения Railway!")
+    raise ValueError("BOT_TOKEN не задан в переменных окружения!")
 
 PORT = int(os.getenv("PORT", 8000))
 WEBHOOK_PATH = "/webhook"
 
-# Автоматическое определение домена Railway
+# Домен от Railway (автоматически подставляется)
 RAILWAY_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN")
 WEBHOOK_URL = f"https://{RAILWAY_DOMAIN}{WEBHOOK_PATH}" if RAILWAY_DOMAIN else f"http://localhost:{PORT}{WEBHOOK_PATH}"
 
-logger.info(f"Старт бота | Webhook: {WEBHOOK_URL}")
+logger.info(f"Запуск бота | Webhook: {WEBHOOK_URL}")
 
 # FastAPI приложение
 app = FastAPI(title="P2P Exchanger Test", version="1.0")
 
-# Глобальный объект приложения Telegram
+# Глобальный объект
 application: Application = None
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────
 # Утилиты
 
 def get_rate() -> float:
-    """Симуляция курса с небольшой наценкой"""
+    """Симуляция курса с накруткой 5–10%"""
     return 105.50 * (1 + random.uniform(0.05, 0.10))
 
 
-def jitter_amount(base: float) -> float:
-    """Лёгкая рандомизация суммы"""
-    return round(base * random.uniform(0.92, 1.12), 2)
+def jitter(base: float) -> float:
+    """Рандомизация суммы ±8%"""
+    return round(base * random.uniform(0.92, 1.08), 2)
 
 
-async def create_test_payment(amount_usdt: float, order_id: str) -> str:
-    """Тестовая платёжная ссылка (без реального шлюза)"""
-    fake_tx = uuid.uuid4().hex[:10]
-    url = f"https://test-pay.example.com/{fake_tx}?order={order_id}&sum={amount_usdt}"
-    logger.info(f"Создана тестовая оплата: {url}")
+async def create_fake_payment(amount: float, order_id: str) -> str:
+    """Тестовая платёжная ссылка"""
+    tx = uuid.uuid4().hex[:10]
+    url = f"https://test-pay.example.com/pay/{tx}?order={order_id}&sum={amount}"
+    logger.info(f"Сгенерирована тестовая оплата → {url}")
     return url
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────
 # Обработчики
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -86,7 +86,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     query = update.callback_query
     await query.answer()
 
@@ -95,7 +95,7 @@ async def callback(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         await query.message.reply_text("Введите сумму в USDT (минимум 10):")
 
 
-async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def amount_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if context.user_data.get("mode") != "usdt_rub":
         await update.message.reply_text("Начните с /start")
         return
@@ -104,15 +104,15 @@ async def handle_amount(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         amount = float(update.message.text.strip())
         if amount < 10:
             raise ValueError
-    except ValueError:
-        await update.message.reply_text("Введите число ≥ 10")
+    except:
+        await update.message.reply_text("Введите число не меньше 10")
         return
 
     rate = get_rate()
-    rub = jitter_amount(amount * rate)
+    rub = jitter(amount * rate)
 
     order_id = str(uuid.uuid4())[:8].upper()
-    payment_url = await create_test_payment(amount, order_id)
+    payment_url = await create_fake_payment(amount, order_id)
 
     await update.message.reply_text(
         f"Ордер #{order_id}\n\n"
@@ -131,44 +131,41 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     )
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────
 # Webhook
 
 @app.post(WEBHOOK_PATH)
-async def webhook(request: Request):
+async def telegram_webhook(request: Request):
     update = Update.de_json(await request.json(), application.bot)
     await application.process_update(update)
     return {"ok": True}
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────
 # Инициализация
 
-async def init():
+async def setup():
     global application
     application = Application.builder().token(BOT_TOKEN).build()
 
     application.add_handler(CommandHandler("start", start))
-    application.add_handler(CallbackQueryHandler(callback))
-    application.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, handle_amount))
+    application.add_handler(CallbackQueryHandler(callback_query))
+    application.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, amount_handler))
     application.add_handler(CommandHandler("confirm", confirm))
 
     await application.initialize()
     await application.bot.set_webhook(url=WEBHOOK_URL)
-    logger.info("Webhook установлен успешно")
+    logger.info("Webhook успешно установлен")
 
 
-# ──────────────────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────
 # Запуск
 
 if __name__ == "__main__":
     import uvicorn
-
-    # Инициализация бота
-    asyncio.run(init())
-
+    asyncio.run(setup())
     uvicorn.run(
-        "main:app",
+        app,
         host="0.0.0.0",
         port=PORT,
         log_level="info"
