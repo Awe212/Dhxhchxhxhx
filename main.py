@@ -1,7 +1,7 @@
 # main.py
 """
-Симуляционный Telegram-обменник USDT → RUB
-Версия без БД, с тестовыми платежами
+Симуляционный Telegram P2P-обменник USDT → RUB
+Версия без фильтров, без БД, тестовые платежи
 Готов к Railway (Python 3.12)
 """
 
@@ -92,32 +92,38 @@ async def callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         await query.message.reply_text("Введите сумму в USDT (минимум 10):")
 
 
-async def amount_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if context.user_data.get("mode") != "usdt_rub":
-        await update.message.reply_text("Начните с /start")
-        return
+async def any_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    # Обрабатываем любое текстовое сообщение
+    # Если пользователь уже в режиме обмена — обрабатываем сумму
+    if context.user_data.get("mode") == "usdt_rub":
+        try:
+            amount = float(update.message.text.strip())
+            if amount < 10:
+                await update.message.reply_text("Сумма должна быть не меньше 10 USDT")
+                return
+        except:
+            await update.message.reply_text("Пожалуйста, введите число")
+            return
 
-    try:
-        amount = float(update.message.text.strip())
-        if amount < 10:
-            raise ValueError
-    except:
-        await update.message.reply_text("Введите число ≥ 10")
-        return
+        rate = get_rate()
+        rub = jitter(amount * rate)
 
-    rate = get_rate()
-    rub = jitter(amount * rate)
+        order_id = str(uuid.uuid4())[:8].upper()
+        payment_url = await create_fake_payment(amount, order_id)
 
-    order_id = str(uuid.uuid4())[:8].upper()
-    payment_url = await create_fake_payment(amount, order_id)
+        await update.message.reply_text(
+            f"Ордер #{order_id}\n\n"
+            f"Отправляете: {amount:.2f} USDT\n"
+            f"Получаете ≈ {rub:.2f} RUB\n\n"
+            f"Ссылка на оплату (тест):\n{payment_url}\n\n"
+            "После оплаты напишите /confirm"
+        )
 
-    await update.message.reply_text(
-        f"Ордер #{order_id}\n\n"
-        f"Отправляете: {amount:.2f} USDT\n"
-        f"Получаете ≈ {rub:.2f} RUB\n\n"
-        f"Ссылка на оплату (тест):\n{payment_url}\n\n"
-        "После оплаты напишите /confirm"
-    )
+        # Сбрасываем режим после обработки
+        context.user_data.pop("mode", None)
+    else:
+        # Если не в режиме — просто подсказка
+        await update.message.reply_text("Напишите /start для начала обмена")
 
 
 async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -147,7 +153,7 @@ async def setup():
 
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(callback_query))
-    application.add_handler(MessageHandler(filters.TEXT & \~filters.COMMAND, amount_handler))
+    application.add_handler(MessageHandler(filters.TEXT, any_text_handler))  # любой текст
     application.add_handler(CommandHandler("confirm", confirm))
 
     await application.initialize()
