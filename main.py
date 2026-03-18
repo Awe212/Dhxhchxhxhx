@@ -1,8 +1,8 @@
 # main.py
 """
 Симуляционный Telegram P2P-обменник USDT → RUB
-Версия без фильтров, без БД, тестовые платежи
-Готов к Railway (Python 3.12)
+Версия с polling (без webhook, без домена)
+Готов к запуску локально или в Railway
 """
 
 import asyncio
@@ -11,8 +11,6 @@ import os
 import random
 import uuid
 
-from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
@@ -31,38 +29,28 @@ logging.basicConfig(
 )
 logger = logging.getLogger("ExchangerBot")
 
-# Конфигурация
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+# Токен бота (вставь свой или используй переменную окружения)
+BOT_TOKEN = os.getenv("BOT_TOKEN") or "8725892114:AAGOQTmyHtQa9a2JIyhjwCSa1x1tqG1sdzQ"
+
 if not BOT_TOKEN:
-    raise ValueError("BOT_TOKEN не задан в переменных окружения!")
-
-PORT = int(os.getenv("PORT", 8000))
-WEBHOOK_PATH = "/webhook"
-
-RAILWAY_DOMAIN = os.getenv("RAILWAY_PUBLIC_DOMAIN")
-WEBHOOK_URL = f"https://{RAILWAY_DOMAIN}{WEBHOOK_PATH}" if RAILWAY_DOMAIN else f"http://localhost:{PORT}{WEBHOOK_PATH}"
-
-logger.info(f"Запуск бота | Webhook URL: {WEBHOOK_URL}")
-
-# FastAPI приложение
-app = FastAPI(title="P2P Exchanger Test", version="1.0")
-
-# Глобальный объект
-application: Application = None
+    raise ValueError("BOT_TOKEN не задан!")
 
 
 # ────────────────────────────────────────────────
 # Утилиты
 
 def get_rate() -> float:
+    """Симуляция курса с накруткой"""
     return 105.50 * (1 + random.uniform(0.05, 0.10))
 
 
 def jitter(base: float) -> float:
+    """Рандомизация суммы"""
     return round(base * random.uniform(0.92, 1.08), 2)
 
 
 async def create_fake_payment(amount: float, order_id: str) -> str:
+    """Тестовая платёжная ссылка"""
     tx = uuid.uuid4().hex[:10]
     url = f"https://test-pay.example.com/pay/{tx}?order={order_id}&sum={amount}"
     logger.info(f"Сгенерирована тестовая оплата → {url}")
@@ -93,8 +81,6 @@ async def callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 async def any_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    # Обрабатываем любое текстовое сообщение
-    # Если пользователь уже в режиме обмена — обрабатываем сумму
     if context.user_data.get("mode") == "usdt_rub":
         try:
             amount = float(update.message.text.strip())
@@ -119,10 +105,9 @@ async def any_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             "После оплаты напишите /confirm"
         )
 
-        # Сбрасываем режим после обработки
+        # Сбрасываем режим
         context.user_data.pop("mode", None)
     else:
-        # Если не в режиме — просто подсказка
         await update.message.reply_text("Напишите /start для начала обмена")
 
 
@@ -135,41 +120,28 @@ async def confirm(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ────────────────────────────────────────────────
-# Webhook
+# Запуск с polling
 
-@app.post(WEBHOOK_PATH)
-async def telegram_webhook(request: Request):
-    update = Update.de_json(await request.json(), application.bot)
-    await application.process_update(update)
-    return {"ok": True}
-
-
-# ────────────────────────────────────────────────
-# Инициализация
-
-async def setup():
-    global application
+async def main():
     application = Application.builder().token(BOT_TOKEN).build()
 
+    # Хендлеры
     application.add_handler(CommandHandler("start", start))
     application.add_handler(CallbackQueryHandler(callback_query))
     application.add_handler(MessageHandler(filters.TEXT, any_text_handler))  # любой текст
     application.add_handler(CommandHandler("confirm", confirm))
 
+    logger.info("Бот запущен в режиме polling")
     await application.initialize()
-    await application.bot.set_webhook(url=WEBHOOK_URL)
-    logger.info("Webhook успешно установлен")
+    await application.start()
+    await application.updater.start_polling(
+        drop_pending_updates=True,  # игнорируем старые сообщения
+        allowed_updates=["message", "callback_query"]
+    )
 
+    # Держим бота живым
+    await asyncio.Event().wait()
 
-# ────────────────────────────────────────────────
-# Запуск — ТОЛЬКО ЗДЕСЬ
 
 if __name__ == "__main__":
-    import uvicorn
-    asyncio.run(setup())
-    uvicorn.run(
-        app,
-        host="0.0.0.0",
-        port=PORT,
-        log_level="info"
-    )
+    asyncio.run(main())
