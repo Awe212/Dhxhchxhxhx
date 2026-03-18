@@ -36,7 +36,7 @@ if not BOT_TOKEN:
 
 PORT = int(os.getenv("PORT", 8000))
 BASE_URL = os.getenv("BASE_URL", f"http://0.0.0.0:{PORT}")
-WEB_APP_URL = f"https://{os.getenv('RAILWAY_PUBLIC_DOMAIN', 'dhxhchxhxhx-production.up.railway.app')}/mini-app"
+WEB_APP_URL = f"https://{os.getenv('RAILWAY_PUBLIC_DOMAIN')}/mini-app"
 
 app = FastAPI(title="P2P Exchanger Mini App", version="1.0")
 
